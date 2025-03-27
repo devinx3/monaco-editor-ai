@@ -1,11 +1,11 @@
 import React from 'react';
-import { Alert, Input, Button, Select, Typography, Row, Col, Tooltip, Drawer, Space, Menu, Form, message } from 'antd';
+import { Alert, Input, Button, Select, Typography, Row, Col, Tooltip, Drawer, Space, Menu, Form, message, ConfigProvider, theme } from 'antd';
 import { SendOutlined, SettingOutlined, LoadingOutlined, CaretRightOutlined, DiffOutlined, PlusOutlined } from '@ant-design/icons';
 import ReactMarkdown from 'react-markdown';
 import Editor, { DiffEditor } from '@monaco-editor/react';
 import './ChatPanel.css';
 import { createConversation } from './AiAgent';
-import { prompt } from './prompt'
+import { getPrompt } from './prompt'
 import DataStore from './dataStore'
 
 const { TextArea } = Input;
@@ -13,9 +13,9 @@ const { Text } = Typography;
 
 
 const defaultModelConfig = {
-    baseURL: 'https://api.siliconflow.cn/v1',
-    model: 'deepseek-ai/DeepSeek-V3',
-    secretKey: 'sk-************************************************'
+    baseURL: 'https://api.deepseek.com',
+    model: 'deepseek-chat',
+    secretKey: 'sk-********************************'
 }
 
 const CodeView = ({ codeRange, value, language, originEditor }) => {
@@ -36,9 +36,7 @@ const CodeView = ({ codeRange, value, language, originEditor }) => {
             message.error("编辑器不存在");
             return;
         }
-        console.log("codeRange", codeRange)
         if (codeRange) {
-            debugger
             originEditor.executeEdits("", [
                 {
                     range: codeRange,
@@ -49,15 +47,14 @@ const CodeView = ({ codeRange, value, language, originEditor }) => {
         } else {
             originEditor.setValue(val)
         }
-
     }
     return (<>
         <div style={{ backgroundColor: '#222222', padding: '10px', borderRadius: '4px' }}>
-            <Row>
-                <Col offset={1}>
-                    script.js
+            <Row gutter={16}>
+                <Col flex={2}>
+                    脚本
                 </Col>
-                <Col span={2} offset={18}>
+                <Col flex="right">
                     <Text copyable={{ text: value }} />
                     <Space />
                     <Tooltip placement="topRight" title="应用">
@@ -77,7 +74,6 @@ const CodeView = ({ codeRange, value, language, originEditor }) => {
                             onClick={() => setDiffFlag(true)}
                         />
                     </Tooltip>
-
                 </Col>
             </Row>
             <Row>
@@ -160,10 +156,6 @@ const CodeDiffEditorView = ({ openCodeDiffView, closeCodeDiffView, language, ori
                     hideUnchangedRegions: {
                         enabled: true
                     },
-                    // You can optionally disable the resizing
-                    // enableSplitViewResizing: false,
-                    // Render the diff inline
-                    // renderSideBySide: false,
                 }}
             />
         </Drawer>
@@ -196,7 +188,7 @@ const ModelSetting = ({ usedModelKey, setModelOptions }) => {
     };
 
     return (<>
-        <Button className="model-setting-btn" onClick={() => setOpen(true)}>
+        <Button onClick={() => setOpen(true)}>
             <SettingOutlined />
         </Button>
         {open ?
@@ -306,16 +298,44 @@ const ModelSettingForm = ({ usedModelKey, updateKey, model, data }) => {
     );
 }
 
-const ChatPanel = ({ monaco, editor }) => {
-    const [messages, setMessages] = React.useState([]);
-    const [inputMessage, setInputMessage] = React.useState('');
+const chatCache = {
+    path: undefined,
+    defaultData: {
+        messages: [],
+        conversation: null,
+        inputMessage: '',
+        errorMessage: '',
+        codeSelect: 'code'
+    },
+    data: null
+}
+
+const updateChatData = (path, data) => {
+    chatCache.path = path;
+    chatCache.data = data;
+}
+const getChatData = (path) => {
+    if (path !== chatCache.path) {
+        return chatCache.defaultData;
+    }
+    return chatCache.data || chatCache.defaultData;
+}
+
+const ChatPanel = ({ path, category, monaco, editor }) => {
+    const chatCacheData = getChatData(path);
+    const [messages, setMessages] = React.useState(chatCacheData.messages);
+    const [inputMessage, setInputMessage] = React.useState(chatCacheData.inputMessage);
     const [favoriteModel, setFavoriteModel] = React.useState(dataStore.getFavoriteModel());
     const [modelOptions, setModelOptions] = React.useState([]);
     const [loading, setLoading] = React.useState(false);
-    const [errorMessage, setErrorMessage] = React.useState('');
+    const [errorMessage, setErrorMessage] = React.useState(chatCacheData.errorMessage);
     const messagesEndRef = React.useRef(null);
-    const [conversation, setConversation] = React.useState(null);
-    const [codeSelect, setCodeSelect] = React.useState('code');
+    const [conversation, setConversation] = React.useState(chatCacheData.conversation);
+    const [codeSelect, setCodeSelect] = React.useState(chatCacheData.codeSelect);
+
+    React.useEffect(() => {
+        updateChatData(path, { messages, inputMessage, errorMessage, conversation, codeSelect })
+    }, [path, messages, inputMessage, errorMessage, conversation, codeSelect]);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -353,11 +373,13 @@ const ChatPanel = ({ monaco, editor }) => {
     }, [messages]);
 
 
-    const handleChat = async (inputMessage, currentCode) => {
+    const handleChat = async (inputMessage) => {
         try {
             if (conversation.isEmpty()) {
-                // conversation.system(prompt.jsDeveloper);
-                conversation.system(prompt.customize);
+                const systemPrompt = getPrompt(category);
+                if (systemPrompt) {
+                    conversation.system(systemPrompt);
+                }
             }
             let range = null;
             if (codeSelect && editor) {
@@ -386,7 +408,11 @@ const ChatPanel = ({ monaco, editor }) => {
         if (loading) return;
         if (inputMessage.trim().length === 0) return;
         if (!favoriteModel) {
-            message.warning("先选择模型");
+            if (!(modelOptions.length > 0)) {
+                message.warning("请配置模型");
+            } else {
+                message.warning("请选择模型");
+            }
             return;
         }
         const callback = async () => {
@@ -419,115 +445,118 @@ const ChatPanel = ({ monaco, editor }) => {
         callback().finally(() => setLoading(false));
     };
     return (
-        <div className="devinx3-chat">
-            <div className="devinx3-chat-header">
-                <Text>AI 助手</Text>
-                <Button style={{ color: 'white' }} icon={<PlusOutlined />} onClick={() => startChat(favoriteModel)} />
-            </div>
+        <ConfigProvider
+            theme={{
+                algorithm: theme.darkAlgorithm,
+            }}
+        >
+            <div className="devinx3-chat">
+                <div className="devinx3-chat-header">
+                    <Text>AI 助手</Text>
+                    <Button type='link' style={{ color: 'white' }} size='small' icon={<PlusOutlined />} disabled={loading} onClick={() => startChat(favoriteModel)} />
+                </div>
 
-            <div className="devinx3-chat-message-list">
-                {messages.map((msg, index) => (
-                    <div
-                        key={index}
-                        className={`devinx3-chat-message ${msg.sender === 'user' ? 'user' : 'ai'}`}
-                    >
-                        {msg.sender === 'user' ? (
-                            <div>{msg.text}</div>
-                        ) : (
-                            <div>
-                                <ReactMarkdown
-                                    components={{
-                                        code: ({ node, inline, className, children, ...props }) => {
-                                            const language = className ? className.replace('language-', '') : '';
-                                            const value = String(children).trimEnd("\n");
-                                            return value.includes('\n') ? (
-                                                <CodeView codeRange={msg.codeRange} language={language} value={value} originEditor={editor} />
-                                            ) : (
-                                                <code {...props}>{children}</code>
-                                            );
-                                        }
-                                    }}
-                                >
-                                    {msg.text}
-                                </ReactMarkdown>
-                            </div>
-                        )}
-                    </div>
-                ))}
-                {loading ? <Button style={{ backgroundColor: 'transparent', borderColor: 'transparent' }} icon={<LoadingOutlined style={{ color: 'white' }} />} /> : null}
-                {errorMessage ? <Alert type="error" style={{ fontSize: "12px" }} message={errorMessage} /> : null}
-
-                <div ref={messagesEndRef} />
-            </div>
-            <div className="devinx3-chat-input-area">
-                <TextArea
-                    style={{ fontSize: "12px" }}
-                    value={inputMessage}
-                    onChange={(e) => setInputMessage(e.target.value)}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            handleSendMessage();
-                        }
-                    }}
-                    placeholder="输入问题..."
-                    autoSize={{ minRows: 3, maxRows: 6 }}
-                    disabled={loading}
-                />
-                <Row className="devinx3-chat-toolbar" align="middle" justify="space-between">
-                    <Col>
-                        <Row gutter={8} align="middle">
-                            <Col>
-                                <ModelSetting usedModelKey={favoriteModel} setModelOptions={setModelOptions} />
-                                <Select
-                                    className="model-select"
-                                    value={favoriteModel}
-                                    onChange={(val) => {
-                                        setFavoriteModel(val);
-                                        dataStore.updateFavoriteModel(val);
-                                        startChat(val);
-                                    }}
-                                    placement="topLeft"
-                                    options={
-                                        modelOptions.map(x => ({
-                                            value: x,
-                                            label: x
-                                        }))
-                                    }
-                                    disabled={loading}
-                                />
-                            </Col>
-                            <Col>
-
-                                <Select
-                                    className="code-select"
-                                    prefix={<Text style={{ color: '#d4d4d4' }}>@</Text>}
-                                    value={codeSelect}
-                                    onChange={setCodeSelect}
-                                    placement="topLeft"
-                                    options={[
-                                        { value: 'code', label: '全文' },
-                                        { value: 'selection', label: '选中区' }
-                                    ]}
-                                    allowClear
-                                    disabled={loading}
-                                />
-                            </Col>
-                        </Row>
-                    </Col>
-                    <Col>
-                        <Button
-                            type="primary"
-                            icon={<SendOutlined />}
-                            onClick={handleSendMessage}
-                            loading={loading}
+                <div className="devinx3-chat-message-list">
+                    {messages.map((msg, index) => (
+                        <div
+                            key={index}
+                            className={`devinx3-chat-message ${msg.sender === 'user' ? 'user' : 'ai'}`}
                         >
-                            发送
-                        </Button>
-                    </Col>
-                </Row>
+                            {msg.sender === 'user' ? (
+                                <div>{msg.text}</div>
+                            ) : (
+                                <div>
+                                    <ReactMarkdown
+                                        components={{
+                                            code: ({ node, inline, className, children, ...props }) => {
+                                                const language = className ? className.replace('language-', '') : '';
+                                                const value = String(children).trimEnd("\n");
+                                                return value.includes('\n') ? (
+                                                    <CodeView codeRange={msg.codeRange} language={language} value={value} originEditor={editor} />
+                                                ) : (
+                                                    <code {...props}>{children}</code>
+                                                );
+                                            }
+                                        }}
+                                    >
+                                        {msg.text}
+                                    </ReactMarkdown>
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                    {loading ? <Button style={{ backgroundColor: 'transparent', borderColor: 'transparent' }} icon={<LoadingOutlined style={{ color: 'white' }} />} /> : null}
+                    {errorMessage ? <Alert type="error" style={{ fontSize: "12px" }} message={errorMessage} /> : null}
+
+                    <div ref={messagesEndRef} />
+                </div>
+                <div>
+                    <TextArea
+                        style={{ fontSize: "12px" }}
+                        value={inputMessage}
+                        onChange={(e) => setInputMessage(e.target.value)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSendMessage();
+                            }
+                        }}
+                        placeholder="输入问题..."
+                        autoSize={{ minRows: 5, maxRows: 10 }}
+                        disabled={loading}
+                    />
+                    <Row style={{marginTop: '5px', marginBottom: '5px'}} align="middle" justify="space-between">
+                        <Col>
+                            <Row gutter={8} align="middle">
+                                <Col>
+                                    <ModelSetting usedModelKey={favoriteModel} setModelOptions={setModelOptions} />
+                                    <Select
+                                        value={favoriteModel}
+                                        onChange={(val) => {
+                                            setFavoriteModel(val);
+                                            dataStore.updateFavoriteModel(val);
+                                            startChat(val);
+                                        }}
+                                        placement="topLeft"
+                                        options={
+                                            modelOptions.map(x => ({
+                                                value: x,
+                                                label: x
+                                            }))
+                                        }
+                                        disabled={loading}
+                                    />
+                                </Col>
+                                <Col>
+                                    <Select
+                                        style={{width: '90px'}}
+                                        value={codeSelect}
+                                        onChange={setCodeSelect}
+                                        placement="topLeft"
+                                        options={[
+                                            { value: 'code', label: '全文' },
+                                            { value: 'selection', label: '选中区' }
+                                        ]}
+                                        allowClear
+                                        disabled={loading}
+                                    />
+                                </Col>
+                            </Row>
+                        </Col>
+                        <Col>
+                            <Button
+                                // type="primary"
+                                icon={<SendOutlined />}
+                                onClick={handleSendMessage}
+                                loading={loading}
+                            >
+                                发送
+                            </Button>
+                        </Col>
+                    </Row>
+                </div>
             </div>
-        </div>
+        </ConfigProvider>
     );
 };
 

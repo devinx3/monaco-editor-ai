@@ -1,44 +1,69 @@
 import React, { useState } from 'react';
-import { Divider, Menu, Typography } from "antd";
+import { App, Button, ConfigProvider, theme } from "antd";
 import Editor from '@monaco-editor/react';
 import ChatPanel from './ChatPanel';
 import './CodeEditor.css';
 
-const { Text } = Typography;
-
-const CodeEditor = () => {
+const AiCodeEditor = ({ category, path, value, onChange, onSaveCode, onRunCode, onExit, beforeMount }) => {
+    const { message } = App.useApp();
     const [monacoInstance, setMonacoInstance] = useState(null);
     const [editorInstance, setEditorInstance] = useState(null);
     const containerRef = React.useRef(null);
 
+    const handleRunCode = () => {
+        if (editorInstance && onRunCode) {
+            const code = editorInstance.getValue();
+            if (onSaveCode) {
+                onSaveCode(code, () => onRunCode(code));
+            } else {
+                onRunCode(code);
+            }
+        } else {
+            message.warning("暂不支持运行");
+        }
+    }
+    const handleSave = () => {
+        if (editorInstance && onSaveCode) {
+            onSaveCode(editorInstance.getValue(), () => message.success("保存成功"));
+        } else {
+            message.warning("暂不支持保存");
+        }
+    }
     const handleEditorDidMount = (editor, monaco) => {
         setEditorInstance(editor);
         setMonacoInstance(monaco);
+        if (monaco && editor) {
+            editor.addCommand(monaco.KeyCode.Escape, onExit);
+            editor.addAction({
+                id: 'exit',
+                label: '退出',
+                keybindings: [monaco.KeyCode.Escape],
+                contextMenuGroupId: 'z_devinx3CustomizeGroup50',
+                run: onExit
+            });
+        }
     };
 
     return (
         <div className="devinx3-editor-container">
-            <div className='devinx3-editor-header'>
-                <Menu
-                    className='devinx3-editor-header-menu'
-                    mode="horizontal"
-                    items={[{
-                        key: 'file',
-                        label: <Text className='devinx3-label'>File</Text>,
-                        children: [{
-                            key: 'exit',
-                            label: 'Exit'
-                        }]
-                    }]}
-                />
-            </div>
-            <Divider style={{ height: '1px', margin: '3px' }} />
+            <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}                >
+                <div className='devinx3-editor-header'>
+
+                    <Button type='text' onClick={onExit}>退出</Button>
+                    {onSaveCode ? <Button type='text' onClick={handleSave}>保存</Button> : null}
+                    {onRunCode ? <Button type='text' onClick={handleRunCode}>运行</Button> : null}
+
+                </div>
+            </ConfigProvider>
+            {/* <Divider style={{ height: '1px', margin: '3px' }} /> */}
             <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
                 <div ref={containerRef} className="devinx3-editor-content" style={{ flex: 1 }}>
                     <Editor
-                        defaultLanguage="javascript"
-                        defaultValue="function add(a, b) { return a + b; }"
+                        language="javascript"
                         theme="vs-dark"
+                        path={`${path}_innerAiEditor`}
+                        value={value}
+                        onChange={onChange}
                         options={{
                             minimap: { enabled: false },
                             fontSize: 14,
@@ -48,10 +73,13 @@ const CodeEditor = () => {
                             padding: { top: 5, bottom: 5 },
                             automaticLayout: true
                         }}
+                        beforeMount={beforeMount}
                         onMount={handleEditorDidMount}
                     />
                 </div>
                 <EditorSider
+                    category={category}
+                    path={path}
                     containerWidth={containerRef.current?.offsetWidth || 0}
                     monacoInstance={monacoInstance}
                     editorInstance={editorInstance}
@@ -63,7 +91,7 @@ const CodeEditor = () => {
 
 const minEditorWidthRatio = 0.3; // 编辑器最小宽度 30%
 const maxEditorWidthRatio = 0.7; // 编辑器最大宽度 70%
-const EditorSider = ({ monacoInstance, editorInstance }) => {
+const EditorSider = ({ category, path, monacoInstance, editorInstance }) => {
     const containerWidth = document.body.offsetWidth;
     const [width, setWidth] = useState(document.body.offsetWidth * minEditorWidthRatio); // 初始化侧边栏宽度
     const handleMouseDown = (e) => {
@@ -116,6 +144,8 @@ const EditorSider = ({ monacoInstance, editorInstance }) => {
             />
             <div className="devinx3-editor-sider" style={{ width: width }}>
                 <ChatPanel
+                    category={category}
+                    path={path}
                     monaco={monacoInstance}
                     editor={editorInstance}
                 />
@@ -124,4 +154,4 @@ const EditorSider = ({ monacoInstance, editorInstance }) => {
     );
 };
 
-export default CodeEditor;
+export default AiCodeEditor;
